@@ -11,15 +11,15 @@ describeSEM = function (x, html = TRUE, digits = 1, number_first = TRUE, useNA =
 {
     dot_args <- list(...)
     if ("show_missing_digits" %in% names(dot_args)) {
-        useNA.digits <- dot_args$show_missing_digits
-        dot_args$show_missing_digits <- NULL
+        useNA.digits = dot_args$show_missing_digits
+        dot_args$show_missing_digits = NULL
         warning("Deprecated: show_missing_digits argument is now useNA.digits as of ver. 1.0")
     }
     if ("show_missing" %in% names(dot_args)) {
         if (missing(useNA)) {
             useNA <- convertShowMissing(dot_args$show_missing)
         }
-        dot_args$show_missing <- NULL
+        dot_args$show_missing = NULL
         warning("Deprecated: show_missing argument is now useNA as of ver. 1.0")
     }
     useNA <- match.arg(useNA)
