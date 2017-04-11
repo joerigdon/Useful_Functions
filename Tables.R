@@ -202,12 +202,12 @@ writeDoc(doc,dest)
 
 #Test it out on data set
 #Make a binary variable with some missing data
-mtcars$hp2 = mtcars$hp>100
-mtcars$hp2b = mtcars$hp2
-mtcars$hp2b[3] = NA
+#mtcars$hp2 = mtcars$hp>100
+#mtcars$hp2b = mtcars$hp2
+#mtcars$hp2b[3] = NA
 
 #No p-values with totals column
-t1 = mktab(data=mtcars, var.names=c("mpg","qsec","carb","hp2","hp2b"),ind.cat=c(0,0,1,1,1), group.name="gear", cfn=describeSEM, miss="always", pval=FALSE, tot="last", digit=2) #note how hp2 and hp2b only show one level
+#t1 = mktab(data=mtcars, var.names=c("mpg","qsec","carb","hp2","hp2b"),ind.cat=c(0,0,1,1,1), group.name="gear", cfn=describeSEM, miss="always", pval=FALSE, tot="last", digit=2) #note how hp2 and hp2b only show one level
 
 #P-values, means, display both levels of binary
 #t2 = mktab(mtcars,var.names=c("mpg","qsec","carb","hp2","hp2b"),ind.cat=c(0,0,1,1,1),group.name="gear",cfn=describeMean,miss="always",pval=TRUE,tot="last",digit=2) #now hp2 shows both levels as does hp2b [plus missing for hp2b]
