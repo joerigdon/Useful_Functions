@@ -3,8 +3,6 @@
 library(Gmisc,verbose=FALSE)
 #install.packages("Hmisc")
 library(Hmisc)
-#install.packages("ReporteRs")
-#library(ReporteRs)
 
 #Function to compute mean (SEM)
 describeSEM = function (x, html = TRUE, digits = 1, number_first = TRUE, useNA = c("ifany", "no", "always"), useNA.digits = digits, percentage_sign = TRUE, plusmin_str, language = "en", ...)
