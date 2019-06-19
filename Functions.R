@@ -1,5 +1,58 @@
-#Function to compute multiple imputation CI
-MI.conf.int = function(est , se) {
+##Put together estimate and CI in table form
+estCI = function(est, l, u) {
+paste(paste(paste(paste(paste(est, "(", sep=" "), l, sep=""), ", ", sep=""), u, sep=""), ")", sep="")
+}
+
+##Wald tests for MI
+impGlmDrop1 <- function(vars, outcome, Data,  Family="binomial", Method)
+{
+  red <- combn(vars, length(vars)-1 , simplify=FALSE)
+  diffs <- lapply(red, function(i) setdiff(vars, i))
+  full <- lapply(1:length(red), function(i)
+    paste(c(red[[i]], diffs[[i]]), collapse=" + "))
+  red <- combn(vars, length(vars)-1 , FUN=paste, collapse=" + ")
+
+  out <- vector("list", length(red))
+  for( i in 1:length(red)) {
+
+    redMod <-  with(Data,
+                    glm( formula(paste(outcome, red[[i]], sep="~")), family = Family) )
+    fullMod <-  with(Data,
+                     glm( formula(paste(outcome, full[[i]], sep="~")), family = Family) )
+    out[[i]] <- list(predictors = diffs[[i]],
+                     pval = c( pool.compare(fullMod, redMod, data=Data, method=Method)$pvalue ) )
+  }
+  do.call(rbind.data.frame, out)
+}
+
+#impGlmDrop1(mod1.covs, "odx", Data=imp, Method="Wald")
+
+
+##Make function to summarize logistic regression MI object
+expit = function(x) {
+    exp(x)/(1+exp(x))
+}
+
+ORm.MI = function(mira) {
+mipo = pool(mira)
+e = summary(mipo)[,1]
+p = round(summary(mipo)[,5],5)
+l = summary(mipo)[,6]
+u = summary(mipo)[,7]
+tab = cbind(e,l,u)
+tab2 = rbind(round(expit(tab[1,]),2),round(exp(tab[-1,]),2))
+cbind(tab2,round(p,4))
+}
+
+
+##Formula Function
+formulize = function(outc, covs) {
+  string = paste( c(outc, paste(covs, collapse=" + ") ), collapse=" ~ " )
+  return(as.formula(string))
+}
+
+##Function to compute multiple imputation CI
+MI.conf.int = function(est, se, ee=FALSE) {
 n = length(est)
 Q.bar = mean(est , na.rm = TRUE)
 W = mean(se^2 , na.rm = TRUE)
@@ -10,6 +63,13 @@ crit = qt(0.975 , gamma)
 l = Q.bar - crit*sqrt(T)
 u = Q.bar + crit*sqrt(T)
 e = Q.bar
+
+if (ee==TRUE) {
+    l = exp(l)
+    u = exp(u)
+    e = exp(e)
+}
+
 pres = paste(round(e,2),paste(paste(paste(paste("(",round(l,2),sep=""),", ",sep=""),round(u,2),sep=""),")",sep=""),sep=" ")
 output.all = list(e=e,l=l,u=u,pres=pres)
 return(output.all)
@@ -20,6 +80,7 @@ return(output.all)
 WaldTest = function(L,betahat,Vn,h=0)  {
       WaldTest = numeric(3)
       names(WaldTest) = c("W","df","p-value")
+      #L = t(as.matrix(L))
       r = dim(L)[1] #number of restrictions (df)
       W = t(L%*%betahat-h) %*% solve(L%*%Vn%*%t(L)) %*% (L%*%betahat-h) #Chi-square statistic
       W = as.numeric(W)
@@ -49,6 +110,24 @@ est = a%*%summary(j)$coeff[,1] #summary(j)$coeff[,1] are the parameter estimates
 e = as.numeric(est)
 l = as.numeric(est-qnorm(0.975)*sqrt(var.s)) #lower 95% CI
 u = as.numeric(est+qnorm(0.975)*sqrt(var.s)) #upper 95% CI
+pres = paste(round(e,2),paste(paste(paste(paste("(",round(l,2),sep=""),", ",sep=""),round(u,2),sep=""),")",sep=""),sep=" ")
+output.all = list(e=e,l=l,u=u,pres=pres)
+return(output.all)
+}
+
+##For GEE with only beta and vcov supplied
+comp.CI2 = function(contr, beta, vcov, ex=FALSE) {
+contr2 = t(as.matrix(contr))
+var.s = contr2%*%vcov%*%t(contr2)
+est = contr2%*%beta
+e = as.numeric(est)
+l = as.numeric(est-qnorm(0.975)*sqrt(var.s)) #lower 95% CI
+u = as.numeric(est+qnorm(0.975)*sqrt(var.s)) #upper 95% CI
+if (ex==TRUE) {
+    e = exp(e)
+    l = exp(l)
+    u = exp(u)
+}
 pres = paste(round(e,2),paste(paste(paste(paste("(",round(l,2),sep=""),", ",sep=""),round(u,2),sep=""),")",sep=""),sep=" ")
 output.all = list(e=e,l=l,u=u,pres=pres)
 return(output.all)
@@ -192,6 +271,16 @@ CI = function(mat) {
 
 #Logistic regression CI function - fix this?  Delta method needed?
 exp.CI = function(mat) {
+ se = as.numeric(mat[2]) #move to 2 for OR
+ est = as.numeric(mat[1])
+ e = exp(est)
+ l = exp(est-qnorm(0.975)*se) #lower 95% CI
+ u = exp(est+qnorm(0.975)*se) #upper 95% CI
+ pres = paste(round(e,2),paste(paste(paste(paste("(",round(l,2),sep=""),", ",sep=""),round(u,2),sep=""),")",sep=""),sep=" ")
+ return(pres)
+}
+
+exp.CI.surv = function(mat) {
  se = as.numeric(mat[3]) #move to 2 for OR
  est = as.numeric(mat[1])
  e = exp(est)
@@ -209,9 +298,29 @@ x2
 }
 
 #Table making function
-table.eff = function(m1,name,e=FALSE) {
+table.eff = function(m1, name, e=FALSE) {
     if (e==FALSE) {j1 = apply(summary(m1)$coeff,1,CI)}
     else if (e==TRUE) {j1 = apply(summary(m1)$coeff,1,exp.CI)}
+r = diag(length(j1))
+pval = rep("",length(j1))
+for (i in 1:length(name)) {
+ pval[grep(name[i],names(j1))[1]] = round(WaldTest(mtrx(r[grepl(name[i],names(j1)),]),coef(m1),vcov(m1))[3],4)
+}
+tab = data.frame(eff=j1,pval=pval)
+tab
+}
+
+table.eff.GEE = function(m1,name,e=FALSE) {
+    if (e==FALSE) {j1 = apply(summary(m1)$coeff,1,CI)}
+    else if (e==TRUE) {j1 = apply(summary(m1)$coeff,1,exp.CI)}
+    pval = summary(m1)$coeff[, 4]
+    tab = data.frame(eff=j1,pval=round(pval, 4))[-1, ]
+    tab
+}
+
+table.eff.surv = function(m1,name,e=FALSE) {
+    if (e==FALSE) {j1 = apply(summary(m1)$coeff,1,CI)}
+    else if (e==TRUE) {j1 = apply(summary(m1)$coeff,1,exp.CI.surv)}
 r = diag(length(j1))
 pval = rep("",length(j1))
 for (i in 1:length(name)) {
@@ -255,5 +364,10 @@ lik2 = function(x) {
     x1
 }
 
+
+##Zscore function
+zscore = function(x) {
+(x-mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
+}
 
 
