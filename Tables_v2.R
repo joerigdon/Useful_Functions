@@ -1,7 +1,446 @@
 #Load packages
-library(Gmisc, verbose=FALSE)
+library(Gmisc)
 library(Hmisc)
 library(officer)
+
+##Re-do with Kruskal
+prDescGetAndValidateDefaultRef <- function(x, default_ref){
+  if (missing(default_ref)){
+    default_ref <- 1
+  }else if (is.character(default_ref)){
+    if (default_ref %in% levels(x))
+      default_ref <- which(default_ref == levels(x))
+    else
+      stop("You have provided an invalid default reference, '",
+        default_ref, "' can not be found among: ", paste(levels(x), collapse=", "))
+  }else if (!default_ref %in% 1:length(levels(x)))
+    stop("You have provided an invalid default reference,",
+      " it is ", default_ref, " while it should be between 1 and ", length(levels(x)),
+      " as this is only used for factors.")
+
+  return(default_ref)
+}
+
+prGetStatistics <- function(x,
+                            show_perc = FALSE,
+                            html = TRUE,
+                            digits = 1,
+                            digits.nonzero = NA,
+                            numbers_first = TRUE,
+                            useNA = c("ifany", "no", "always"),
+                            useNA.digits = digits,
+                            show_all_values = FALSE,
+                            continuous_fn = describeMean,
+                            factor_fn = describeFactors,
+                            prop_fn = factor_fn,
+                            percentage_sign = TRUE)
+{
+  # All the describe functions have the same interface
+  # so it is useful to gather all the arguments here
+  describe_args <-
+    list(x = x,
+         html = html,
+         digits = digits,
+         digits.nonzero = digits.nonzero,
+         number_first = numbers_first,
+         useNA = useNA,
+         useNA.digits = useNA.digits,
+         percentage_sign = percentage_sign)
+
+  if (is.factor(x) ||
+        is.logical(x) ||
+        is.character(x)){
+    if ((is.factor(x) &&
+           length(levels(x)) == 2) ||
+          (!is.factor(x) &&
+             length(unique(na.omit(x))) == 2)){
+      if (show_perc){
+        total_table <- fastDoCall(prop_fn, describe_args)
+      }else{
+        total_table <- table(x, useNA=useNA)
+        names(total_table)[is.na(names(total_table))] <- "Missing"
+        # Choose only the reference level
+        if (show_all_values == FALSE)
+          total_table <- total_table[names(total_table) %in%
+                                       c(levels(as.factor(x))[1], "Missing")]
+      }
+
+    } else {
+      if (show_perc)
+        total_table <- fastDoCall(factor_fn, describe_args)
+      else{
+        total_table <- table(x, useNA=useNA) %>%
+          txtInt
+        names(total_table)[is.na(names(total_table))] <- "Missing"
+      }
+    }
+  }else{
+    total_table <- fastDoCall(continuous_fn, describe_args)
+
+    # If a continuous variable has two rows then it's assumed that the second is the missing
+    if (length(total_table) == 2 &&
+      show_perc == FALSE)
+      total_table[2] <- sum(is.na(x))
+  }
+  return(total_table)
+}
+
+
+getDescriptionStatsBy2 = function (x, by, digits = 1, html = TRUE, numbers_first = TRUE,
+    statistics = FALSE, statistics.sig_lim = 10^-4, statistics.two_dec_lim = 10^-2,
+    statistics.suppress_warnings = TRUE, useNA = c("ifany", "no",
+        "always"), useNA.digits = digits, continuous_fn = describeMean,
+    prop_fn = describeProp, factor_fn = describeFactors, show_all_values = FALSE,
+    hrzl_prop = FALSE, add_total_col, total_col_show_perc = TRUE,
+    use_units = FALSE, default_ref, NEJMstyle = FALSE, percentage_sign = TRUE,
+    header_count, missing_value = "-", names_of_missing = NULL,
+    ...)
+{
+    API_changes <- c(show_missing_digits = "show_missing.digits",
+        show_missing = "useNA", sig.limit = "statistics.sig_lim",
+        two_dec.limit = "statistics.two_dec_lim")
+    dots <- list(...)
+    fenv <- environment()
+    for (i in 1:length(API_changes)) {
+        old_name <- names(API_changes)[i]
+        new_name <- API_changes[i]
+        if (old_name %in% names(dots)) {
+            if (class(fenv[[new_name]]) == "name") {
+                fenv[[new_name]] <- dots[[old_name]]
+                dots[[old_name]] <- NULL
+                warning("Deprecated: '", old_name, "'", " argument is now '",
+                  new_name, "'", " as of ver. 1.0")
+            }
+            else {
+                stop("You have set both the old parameter name: '",
+                  old_name, "'", " and the new parameter name: '",
+                  new_name, "'.")
+            }
+        }
+    }
+    useNA <- match.arg(useNA)
+    if (!is.function(statistics)) {
+        if (is.list(statistics) || (statistics != FALSE)) {
+            if (is.list(statistics)) {
+                types <- c("continuous", "proportion", "factor")
+                if (any(!names(statistics) %in% types))
+                  stop("If you want to provide custom functions for generating statistics",
+                    " you must either provide a function or a list with the elements:",
+                    " '", paste(types, collapse = "', '"), "'")
+                if (is.numeric(x) && length(unique(x)) != 2) {
+                  statistics <- statistics[["continuous"]]
+                }
+                else if (length(unique(x)) == 2) {
+                  if ("proportion" %in% names(statistics)) {
+                    statistics <- statistics[["proportion"]]
+                  }
+                  else {
+                    statistics <- statistics[["factor"]]
+                  }
+                }
+                else {
+                  statistics <- statistics[["factor"]]
+                }
+                if (is.character(statistics))
+                  statistics <- get(statistics)
+            }
+            if (!is.function(statistics)) {
+                if (length(unique(x)) == 2) {
+                  statistics <- getPvalFisher
+                }
+                else if (is.numeric(x)) {
+                  if (length(unique(by)) == 2)
+                    statistics <- getPvalWilcox
+                  else statistics <- getPvalKruskal
+                }
+                else {
+                  statistics <- getPvalFisher
+                }
+            }
+        }
+    }
+    if (is.function(statistics)) {
+        if (statistics.suppress_warnings) {
+            pval <- suppressWarnings(statistics(x = x, by = by))
+        }
+        else {
+            pval <- statistics(x = x, by = by)
+        }
+    }
+    if (missing(add_total_col) && hrzl_prop) {
+        add_total_col = TRUE
+    }
+    if (is.null(x))
+        stop("You haven't provided an x-value to do the statistics by.",
+            " This error is most frequently caused by referencing an old",
+            " variable name that doesn't exist anymore")
+    if (is.null(by))
+        stop("You haven't provided a by-value to do the statistics by.",
+            " This error is most frequently caused by referencing an old",
+            " variable name that doesn't exist anymore")
+    if (label(x) == "")
+        name <- paste0(deparse(substitute(x)), collapse = "")
+    else name <- label(x)
+    if (is.logical(x)) {
+        x <- factor(x, levels = c(TRUE, FALSE))
+    }
+    else if (is.character(x) && any(table(x, by) == 0)) {
+        x <- factor(x)
+    }
+    if (any(is.na(by))) {
+        warning(sprintf("Your 'by' variable has %d missing values",
+            sum(is.na(by))), "\n   The corresponding 'x' and 'by' variables are automatically removed")
+        x <- x[!is.na(by)]
+        if (inherits(x, "factor")) {
+            x <- factor(x)
+        }
+        by <- by[!is.na(by)]
+        if (inherits(by, "factor")) {
+            by <- factor(by)
+        }
+    }
+    if (useNA == "ifany" && any(is.na(x)))
+        useNA <- "always"
+    if (show_all_values & deparse(substitute(prop_fn)) == "describeProp")
+        prop_fn <- describeFactors
+    addEmptyValuesToMakeListCompatibleWithMatrix <- function(t) {
+        for (n in names(t)) {
+            if (is.matrix(t[[n]])) {
+                tmp_names <- rownames(t[[n]])
+                t[[n]] <- as.vector(t[[n]])
+                names(t[[n]]) <- tmp_names
+            }
+        }
+        all_row_names <- c()
+        for (n in names(t)) {
+            all_row_names <- union(all_row_names, names(t[[n]]))
+        }
+        if (is.null(all_row_names))
+            return(t)
+        if (any(is.na(all_row_names)))
+            all_row_names <- append(all_row_names[is.na(all_row_names) ==
+                FALSE], NA)
+        ret <- list()
+        for (n in names(t)) {
+            ret[[n]] <- rep(missing_value, times = length(all_row_names))
+            names(ret[[n]]) <- all_row_names
+            for (nn in all_row_names) {
+                if (nn %in% names(t[[n]])) {
+                  if (is.na(nn)) {
+                    ret[[n]][is.na(names(ret[[n]]))] <- t[[n]][is.na(names(t[[n]]))]
+                  }
+                  else {
+                    ret[[n]][nn] <- t[[n]][nn]
+                  }
+                }
+            }
+        }
+        return(ret)
+    }
+    if (is.numeric(x)) {
+        if (hrzl_prop)
+            t <- by(x, by, FUN = continuous_fn, html = html,
+                digits = digits, number_first = numbers_first,
+                useNA = useNA, useNA.digits = useNA.digits, horizontal_proportions = table(is.na(x),
+                  useNA = useNA), percentage_sign = percentage_sign)
+        else t <- by(x, by, FUN = continuous_fn, html = html,
+            digits = digits, number_first = numbers_first, useNA = useNA,
+            useNA.digits = useNA.digits, percentage_sign = percentage_sign)
+        missing_t <- sapply(t, is.null)
+        if (any(missing_t)) {
+            substitute_t <- rep(missing_value, length(t[!missing_t][[1]]))
+            names(substitute_t) <- names(t[!missing_t][[1]])
+            for (i in seq_along(t[missing_t])) {
+                t[missing_t][[i]] <- substitute_t
+            }
+        }
+        if (all(unlist(sapply(t, is.na))) & !is.null(names_of_missing)) {
+            substitute_t <- rep(missing_value, length(names_of_missing))
+            names(substitute_t) <- names_of_missing
+            substitute_list <- vector("list", length = length(t))
+            names(substitute_list) <- names(t)
+            for (i in seq_along(substitute_list)) {
+                substitute_list[[i]] <- substitute_t
+            }
+            t <- substitute_list
+        }
+        if (length(t[[1]]) != 1) {
+            fn_name <- deparse(substitute(continuous_fn))
+            if (fn_name == "describeMean")
+                names(t[[1]][1]) = "Mean"
+            else if (fn_name == "describeMedian")
+                names(t[[1]][1]) = "Median"
+            else names(t[[1]][1]) = fn_name
+        }
+    }
+    else if ((!is.factor(x) && length(unique(na.omit(x))) ==
+        2) || (is.factor(x) && length(levels(x)) == 2) && hrzl_prop ==
+        FALSE) {
+        default_ref <- prDescGetAndValidateDefaultRef(x, default_ref)
+        t <- by(x, by, FUN = prop_fn, html = html, digits = digits,
+            number_first = numbers_first, useNA = useNA, useNA.digits = useNA.digits,
+            default_ref = default_ref, percentage_sign = percentage_sign)
+        missing_t <- sapply(t, is.null)
+        if (any(missing_t)) {
+            substitute_t <- rep(missing_value, length(t[!missing_t][[1]]))
+            names(substitute_t) <- names(t[!missing_t][[1]])
+            for (i in seq_along(t[missing_t])) {
+                t[missing_t][[i]] <- substitute_t
+            }
+        }
+        if (all(unlist(sapply(t, is.na))) & !is.null(names_of_missing)) {
+            substitute_t <- rep(missing_value, length(names_of_missing))
+            names(substitute_t) <- names_of_missing
+            substitute_list <- vector("list", length = length(t))
+            names(substitute_list) <- names(t)
+            for (i in seq_along(substitute_list)) {
+                substitute_list[[i]] <- substitute_t
+            }
+            t <- substitute_list
+        }
+        if (unique(sapply(t, length)) == 1)
+            name <- sprintf("%s %s", capitalize(levels(x)[default_ref]),
+                tolower(name))
+        if (NEJMstyle) {
+            percent_sign <- ifelse(html, "%", "\\%")
+            if (numbers_first)
+                name <- sprintf("%s - no (%s)", name, percent_sign)
+            else name <- sprintf("%s - %s (no)", name, percent_sign)
+        }
+        if (length(t[[1]]) == 1) {
+            names(t[[1]][1]) <- name
+        }
+    }
+    else {
+        if (hrzl_prop) {
+            t <- by(x, by, FUN = factor_fn, html = html, digits = digits,
+                number_first = numbers_first, useNA = useNA,
+                useNA.digits = useNA.digits, horizontal_proportions = table(x,
+                  useNA = useNA), percentage_sign = percentage_sign)
+        }
+        else {
+            t <- by(x, by, FUN = factor_fn, html = html, digits = digits,
+                number_first = numbers_first, useNA = useNA,
+                useNA.digits = useNA.digits, percentage_sign = percentage_sign)
+        }
+        missing_t <- sapply(t, is.null)
+        if (any(missing_t)) {
+            substitute_t <- rep(missing_value, length(t[!missing_t][[1]]))
+            names(substitute_t) <- names(t[!missing_t][[1]])
+            for (i in seq_along(t[missing_t])) {
+                t[missing_t][[i]] <- substitute_t
+            }
+        }
+        if (all(unlist(sapply(t, is.na))) & !is.null(names_of_missing)) {
+            substitute_t <- rep(missing_value, length(names_of_missing))
+            names(substitute_t) <- names_of_missing
+            substitute_list <- vector("list", length = length(t))
+            names(substitute_list) <- names(t)
+            for (i in seq_along(substitute_list)) {
+                substitute_list[[i]] <- substitute_t
+            }
+            t <- substitute_list
+        }
+    }
+    t <- addEmptyValuesToMakeListCompatibleWithMatrix(t)
+    results <- matrix(unlist(t), ncol = length(t))
+    getHeader <- function(tbl_cnt, header_count, html) {
+        if (missing(header_count) || identical(header_count,
+            FALSE)) {
+            return(names(tbl_cnt))
+        }
+        if (is.character(header_count)) {
+            if (!grepl("%s", header_count, fixed = TRUE))
+                stop("Your header_count must accept a string character",
+                  " or it will fail to add the count, i.e. use the ",
+                  " format: 'Text before %s text after'")
+            cnt_str <- sprintf(header_count, txtInt(tbl_cnt))
+        }
+        else {
+            cnt_str <- paste("No.", txtInt(tbl_cnt))
+        }
+        return(mapply(txtMergeLines, names(tbl_cnt), cnt_str,
+            html = html))
+    }
+    cn <- getHeader(table(by), header_count, html)
+    if (class(t[[1]]) == "matrix")
+        rownames(results) <- rownames(t[[1]])
+    else rownames(results) <- names(t[[1]])
+    if (is.null(rownames(results)) && nrow(results) == 1)
+        rownames(results) <- name
+    if (!missing(add_total_col) && add_total_col != FALSE) {
+        total_table <- prGetStatistics(x[is.na(by) == FALSE],
+            numbers_first = numbers_first, show_perc = total_col_show_perc,
+            show_all_values = show_all_values, useNA = useNA,
+            useNA.digits = useNA.digits, html = html, digits = digits,
+            continuous_fn = continuous_fn, factor_fn = factor_fn,
+            prop_fn = prop_fn, percentage_sign = percentage_sign)
+        if (!is.matrix(total_table)) {
+            total_table <- matrix(total_table, ncol = 1, dimnames = list(names(total_table)))
+        }
+        if (nrow(total_table) != nrow(results)) {
+            stop("There is a discrepancy in the number of rows in the total table",
+                " and the by results: ", nrow(total_table), " total vs ",
+                nrow(results), " results", "\n Rows total:",
+                paste(rownames(total_table), collapse = ", "),
+                "\n Rows results:", paste(rownames(results),
+                  collapse = ", "))
+        }
+        cn_tot <- getHeader(c(Total = length(x[is.na(by) == FALSE])),
+            header_count, html)
+        if (add_total_col != "last") {
+            results <- cbind(total_table, results)
+            cn <- c(cn_tot, cn)
+        }
+        else {
+            results <- cbind(results, total_table)
+            cn <- c(cn, cn_tot)
+        }
+    }
+    if (isTRUE(use_units)) {
+        if (units(x) != "") {
+            unitcol <- rep(sprintf("%s", units(x)), times = NROW(results))
+            unitcol[rownames(results) == "Missing"] <- ""
+        }
+        else {
+            unitcol <- rep("", times = NROW(results))
+        }
+        if (length(unitcol) != nrow(results)) {
+            stop("There is an discrepancy in the number of rows in the units",
+                " and the by results: ", length(unitcol), " units vs ",
+                nrow(results), " results", "\n Units:", paste(unitcol,
+                  collapse = ", "), "\n Rows results:", paste(rownames(results),
+                  collapse = ", "))
+        }
+        results <- cbind(results, unitcol)
+        cn <- c(cn, "units")
+    }
+    else if (use_units == "name") {
+        if (units(x) != "") {
+            name <- sprintf("%s (%s)", name, units(x))
+        }
+    }
+    if (is.function(statistics)) {
+        if (is.numeric(pval) && pval <= 1 && pval >= 0) {
+            pval <- txtPval(pval, lim.sig = statistics.sig_lim,
+                lim.2dec = statistics.two_dec_lim, html = html)
+            results <- cbind(results, c(pval, rep("", nrow(results) -
+                1)))
+            cn <- c(cn, "P-value")
+        }
+        else if (is.character(pval) && !is.null(attr(pval, "colname"))) {
+            results <- cbind(results, c(pval, rep("", nrow(results) -
+                1)))
+            cn <- c(cn, attr(pval, "colname"))
+        }
+        else {
+            stop("Your statistics function should either return a numerical value from 0 to 1 or a character with the attribute 'colname'")
+        }
+    }
+    colnames(results) <- cn
+    label(results) <- name
+    return(results)
+}
 
 #Function to compute N=
 describeN = function (x, html = TRUE, digits = 1, number_first = TRUE, useNA = c("ifany", "no", "always"), useNA.digits = digits, percentage_sign = TRUE, plusmin_str, language = "en", ...)
@@ -116,31 +555,36 @@ describeSEM = function (x, html = TRUE, digits = 1, number_first = TRUE, useNA =
 #digit is the number of digits you want displayed, e.g., 1 if 12.1, 2 if 12.12, etc.
 #NOTE: I recommend prefixing categories of categorical variables with alphabetized letters to ensure ordering in the table, e.g., for race, code it as "a.Black", "b.White", etc.
 
-mktab = function(data,var.names,ind.cat,group.name,cfn,miss,pval,tot,digit) {
+mktab = function(data, var.names, ind.cat, group.name, cfn, miss, pval, tot, digit, kruskal=FALSE) {
     n = names(data)
-    cols = data[,which(n==group.name)]
-    r = table(data[,which(n==group.name)])
-    if (tot=="last") {r = matrix(c(r,sum(r)),1,length(r)+1)} #update r - this is why I was having trouble!!
-    j = c(apply(r,1,function(x) paste("n=",x,sep="")))
+    cols = as.character(data[, which(n==group.name)])
+    r = table(data[, which(n==group.name)])
+    if (tot=="last") {r = matrix(c(r, sum(r)), 1, length(r)+1)} #update r - this is why I was having trouble!!
+    j = c(apply(r, 1, function(x) paste("n=",x,sep="")))
     for (i in 1:length(var.names)) {
         if (ind.cat[i]==0) {
-            outc = data[,which(n==var.names[i])]
+            outc = data[, which(n==var.names[i])]
             #label(outc) = var.names[i]
-            dd2 = getDescriptionStatsBy(outc,cols,html=TRUE,useNA=miss,statistics=pval,add_total_col=tot,continuous_fn=cfn,digits=digit)
+            if (kruskal==FALSE) {
+                dd2 = getDescriptionStatsBy(outc, cols, html=TRUE, useNA=miss, statistics=pval, add_total_col=tot, continuous_fn=cfn, digits=digit)}
+            else if (kruskal==TRUE) {
+                    dd2 = getDescriptionStatsBy2(outc, cols, html=TRUE, useNA=miss, statistics=pval, add_total_col=tot, continuous_fn=cfn, digits=digit)
+            }
             rownames(dd2)[1] = var.names[i]
         }
         else if (ind.cat[i]==1) {
-            outc = data[,which(n==var.names[i])]
+            outc = data[, which(n==var.names[i])]
             #label(outc) = var.names[i]
-            dd1 = getDescriptionStatsBy(factor(outc),cols,html=TRUE,useNA=miss,statistics=pval,add_total_col=tot,digits=digit)
-            dd2 = rbind(rep("",dim(dd1)[2]),dd1)
+            dd1 = getDescriptionStatsBy(factor(outc), cols, html=TRUE, useNA=miss, statistics=pval, add_total_col=tot, digits=digit)
+            dd2 = rbind(rep("", dim(dd1)[2]), dd1)
             rownames(dd2)[1] = var.names[i]
         }
-      j = rbind(j,dd2)
+      j = rbind(j, dd2)
     }
+
     #Clean up a few things
-    k = t(apply(j,1,function(x) gsub("&plusmn;", "\\±", x)))
-    k2 = t(apply(k,1,function(x) gsub("&lt; ", "<", x)))
+    k = t(apply(j, 1, function(x) gsub("&plusmn;", "\\±", x)))
+    k2 = t(apply(k, 1, function(x) gsub("&lt; ", "<", x)))
     rownames(k2)[rownames(k2)=="j"] = ""
     rownames(k2) = lapply(rownames(k2),function(x) gsub("a[.]", " ", x))
     rownames(k2) = lapply(rownames(k2),function(x) gsub("b[.]", " ", x))
@@ -155,12 +599,12 @@ mktab = function(data,var.names,ind.cat,group.name,cfn,miss,pval,tot,digit) {
     colnames(k2) = lapply(colnames(k2),function(x) gsub("e[.]", " ", x))
     colnames(k2) = lapply(colnames(k2),function(x) gsub("f[.]", " ", x))
     #Remove uninformative missing values if missing="ifany"
-    if (miss=="always") {n0 = apply(k2,1,function(x) sum(x=="0 (0%)" | x=="0 (0.0%)" | x==""))
-    if (pval==TRUE) {r = matrix(c(r,""),1,length(r)+1)}
+    if (miss=="always") {n0=apply(k2, 1, function(x) sum(x=="0 (0%)" | x=="0 (0.0%)" | x==""))
+    if (pval==TRUE) {r=matrix(c(r,""), 1, length(r)+1)}
     rmv = which(rownames(k2)=="Missing" & n0==length(r))
-    if (length(rmv)>0) {k2 = k2[-as.numeric(rmv),]}}
+    if (length(rmv)>0) {k2 = k2[-as.numeric(rmv), ]}}
     #Remove "n=" below P-value if pval=TRUE
-    if (pval==TRUE) {k2[1,colnames(k2)=="P-value"] = ""}
+    if (pval==TRUE) {k2[1, colnames(k2)=="P-value"] = ""}
     k2
 }
 
@@ -234,11 +678,18 @@ print(NarrativeDoc, target=dest)
 }
 
 
-#tt = mktab(data=mtcars, var.names=c("gear", "am", "drat", "qsec"), ind.cat=c(1, 1, 0, 0), group.name="vs", cfn=describeMean, miss="always", pval=TRUE, tot=FALSE, digit=1)
+#mktab(data=mtcars, var.names=c("mpg"), ind.cat=c(0), group.name="gear", cfn=describeMean, miss="always", pval=TRUE, tot=FALSE, kruskal=TRUE, digit=1)
+
+#mktab(data=mtcars, var.names=c("mpg"), ind.cat=c(0), group.name="gear", cfn=describeMean, miss="always", pval=TRUE, tot=FALSE, kruskal=FALSE, digit=1)
+
+
+#kruskal.test(mtcars$mpg, mtcars$gear)
+#anova(lm(mpg ~ factor(gear), data=mtcars)) #make sure gear is a factor variable
 
 #word.tab(tab=tt, dest="/Users/jrigdon/Box sync/Rigdon/Useful Functions/Joe3.docx", help=TRUE)
 
-
+#out = anova(lm(drat ~ vs, data=mtcars))
+#out[["Pr(>F)"]][[1]]
 
 
 
